@@ -1,0 +1,142 @@
+<!DOCTYPE html>
+<html lang="pt">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Busca de Filme</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      background-color: #f4f4f4;
+      padding: 20px;
+    }
+
+    .container {
+      max-width: 600px;
+      margin: 0 auto;
+      padding: 20px;
+      background-color: white;
+      border-radius: 8px;
+      box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
+    }
+
+    h1 {
+      text-align: center;
+      color: #333;
+    }
+
+    .form-group {
+      margin-bottom: 15px;
+    }
+
+    .form-group label {
+      font-weight: bold;
+      display: block;
+      margin-bottom: 5px;
+    }
+
+    .form-group input {
+      width: 100%;
+      padding: 8px;
+      font-size: 16px;
+      border-radius: 4px;
+      border: 1px solid #ccc;
+    }
+
+    .form-group button {
+      width: 100%;
+      padding: 10px;
+      background-color: #4CAF50;
+      color: white;
+      border: none;
+      border-radius: 4px;
+      font-size: 16px;
+      cursor: pointer;
+    }
+
+    .form-group button:hover {
+      background-color: #45a049;
+    }
+
+    .movie-info {
+      margin-top: 20px;
+      border-top: 2px solid #f1f1f1;
+      padding-top: 20px;
+    }
+
+    .movie-info p {
+      font-size: 18px;
+      margin-bottom: 10px;
+    }
+
+    .movie-info .comments {
+      margin-top: 20px;
+      font-style: italic;
+    }
+  </style>
+</head>
+
+<body>
+
+  <div class="container">
+    <h1>Buscar Filme</h1>
+    <div class="form-group">
+      <label for="movieTitle">Título do Filme</label>
+      <input type="text" id="movieTitle" placeholder="Digite o nome do filme" />
+    </div>
+    <div class="form-group">
+      <button onclick="searchMovie()">Buscar</button>
+    </div>
+
+    <div class="movie-info" id="movieInfo" style="display:none;">
+      <h2>Informações do Filme</h2>
+      <p><strong>Título:</strong> <span id="title"></span></p>
+      <p><strong>Ano:</strong> <span id="year"></span></p>
+      <p><strong>Classificação:</strong> <span id="rated"></span></p>
+      <p><strong>Duração:</strong> <span id="runtime"></span></p>
+      <p><strong>Avaliação:</strong> <span id="rating"></span></p>
+      <div class="comments">
+        <h3>Comentários:</h3>
+        <ul id="comments"></ul>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    function searchMovie() {
+      const movieTitle=document.getElementById("movieTitle").value
+      if(!movieTitle) {
+        alert("Por favor, digite o título do filme.")
+        return
+      }
+
+      fetch(`http://localhost:8080/movie?title=${movieTitle}`)
+        .then(response => response.json())
+        .then(data => {
+          // Exibe as informações do filme
+          document.getElementById("movieInfo").style.display="block"
+          document.getElementById("title").textContent=data.Title
+          document.getElementById("year").textContent=data.Year
+          document.getElementById("rated").textContent=data.Rated
+          document.getElementById("runtime").textContent=data.Runtime
+          document.getElementById("rating").textContent=data.Rating
+
+          // Preenche os comentários
+          const commentsList=document.getElementById("comments")
+          commentsList.innerHTML=""
+          data.Comments.forEach(comment => {
+            const li=document.createElement("li")
+            li.textContent=comment
+            commentsList.appendChild(li)
+          })
+        })
+        .catch(error => {
+          alert("Erro ao buscar filme. Tente novamente mais tarde.")
+        })
+    }
+  </script>
+
+</body>
+
+</html>
