@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 )
 
 // Estrutura para armazenar os dados do filme
@@ -21,166 +22,169 @@ type Movie struct {
 	Comments []string `json:"Comments"`
 }
 
-// Substitua pela sua chave de API do OMDb
+// Substitua pela sua chave de API do OMDb e TMDb
 const apiKeyOMDB = "db87d64c"
 const apiKeyTMDB = "10642f172ea2a7371ec16de80326b175"
 
 func getMovie(c *gin.Context) {
-	// Pegamos o título do filme da URL
 	movieTitle := c.Query("title")
-
-	// Se o título estiver vazio, retorna erro
 	if movieTitle == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "O parâmetro 'title' é obrigatório"})
 		return
 	}
 
-	// Codifica o título para URL (ex: "star wars" → "star+wars")
 	encodedTitle := url.QueryEscape(movieTitle)
-
-	// Construímos a URL da API do OMDb
-	apiURLOMDB := fmt.Sprintf("http://www.omdbapi.com/?t=%s&apiKey=%s", encodedTitle, apiKeyOMDB)
-
-	// Fazemos a requisição HTTP GET para OMDb
-	respOMDB, err := http.Get(apiURLOMDB)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Erro ao buscar dados do OMDb"})
-		return
-	}
-	defer respOMDB.Body.Close()
-
-	// Lemos o corpo da resposta do OMDb
-	bodyOMDB, err := ioutil.ReadAll(respOMDB.Body)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Erro ao ler resposta OMDb"})
-		return
-	}
-
-	// Convertemos a resposta JSON do OMDb para a struct Movie
 	var movie Movie
-	err = json.Unmarshal(bodyOMDB, &movie)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Erro ao converter dados OMDb"})
-		return
-	}
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+	errChan := make(chan error, 2) // Canal para capturar erros
 
-	// Agora, buscamos as avaliações no TMDb
-	apiURLTMDB := fmt.Sprintf("https://api.themoviedb.org/3/search/movie?api_key=%s&query=%s", apiKeyTMDB, encodedTitle)
-	respTMDB, err := http.Get(apiURLTMDB)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Erro ao buscar dados do TMDb"})
-		return
-	}
-	defer respTMDB.Body.Close()
+	wg.Add(2) // Definimos que vamos rodar duas goroutines
 
-	// Lemos o corpo da resposta do TMDb
-	bodyTMDB, err := ioutil.ReadAll(respTMDB.Body)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Erro ao ler resposta TMDb"})
-		return
-	}
-
-	// Log para depuração - Verifique a resposta do TMDb
-	fmt.Println("Resposta TMDb:", string(bodyTMDB)) // Exibe a resposta para ver o conteúdo retornado
-
-	// Estrutura para armazenar a resposta do TMDb
-	var tmdbResponse struct {
-		Results []struct {
-			ID          int    `json:"id"`
-			Title       string `json:"title"`
-			ReleaseDate string `json:"release_date"`
-		} `json:"results"`
-	}
-
-	err = json.Unmarshal(bodyTMDB, &tmdbResponse)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Erro ao processar resposta do TMDb"})
-		return
-	}
-
-	// Filtra os filmes de 1996
-	var filteredMovies []struct {
-		ID          int    `json:"id"`
-		Title       string `json:"title"`
-		ReleaseDate string `json:"release_date"`
-	}
-
-	for _, movieResult := range tmdbResponse.Results {
-		if strings.HasPrefix(movieResult.ReleaseDate, "1996") {
-			filteredMovies = append(filteredMovies, movieResult)
-		}
-	}
-
-	// Se não encontrar filme de 1996, utiliza o primeiro da lista
-	if len(filteredMovies) == 0 && len(tmdbResponse.Results) > 0 {
-		filteredMovies = append(filteredMovies, tmdbResponse.Results[0])
-	}
-
-	// Verifica se encontrou algum filme filtrado
-	if len(filteredMovies) > 0 {
-		movieID := filteredMovies[0].ID
-		fmt.Println("ID do filme encontrado no TMDb:", movieID) // Exibe o ID do filme encontrado
-
-		// Agora, buscamos as avaliações do filme com base no ID
-		apiURLRatingsTMDB := fmt.Sprintf("https://api.themoviedb.org/3/movie/%d/reviews?api_key=%s", movieID, apiKeyTMDB)
-		respRatingsTMDB, err := http.Get(apiURLRatingsTMDB)
+	// Requisição ao OMDb em paralelo
+	go func() {
+		defer wg.Done()
+		apiURLOMDB := fmt.Sprintf("http://www.omdbapi.com/?t=%s&apiKey=%s", encodedTitle, apiKeyOMDB)
+		resp, err := http.Get(apiURLOMDB)
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "Erro ao buscar avaliações do TMDb"})
+			errChan <- err
 			return
 		}
-		defer respRatingsTMDB.Body.Close()
+		defer resp.Body.Close()
 
-		// Lemos o corpo da resposta das avaliações
-		bodyRatingsTMDB, err := ioutil.ReadAll(respRatingsTMDB.Body)
+		body, err := ioutil.ReadAll(resp.Body)
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "Erro ao ler avaliações do TMDb"})
+			errChan <- err
 			return
 		}
 
-		// Log para depuração - Verifique a resposta das avaliações
-		fmt.Println("Resposta de avaliações TMDb:", string(bodyRatingsTMDB)) // Exibe as avaliações
+		var tempMovie Movie
+		if err := json.Unmarshal(body, &tempMovie); err != nil {
+			errChan <- err
+			return
+		}
 
-		// Estrutura para processar as avaliações
-		var reviewsResponse struct {
+		// Protegemos a escrita concorrente com Mutex
+		mu.Lock()
+		movie = tempMovie
+		mu.Unlock()
+	}()
+
+	// Requisição ao TMDb em paralelo
+	go func() {
+		defer wg.Done()
+		apiURLTMDB := fmt.Sprintf("https://api.themoviedb.org/3/search/movie?api_key=%s&query=%s", apiKeyTMDB, encodedTitle)
+		resp, err := http.Get(apiURLTMDB)
+		if err != nil {
+			errChan <- err
+			return
+		}
+		defer resp.Body.Close()
+
+		body, err := ioutil.ReadAll(resp.Body)
+		if err != nil {
+			errChan <- err
+			return
+		}
+
+		var tmdbResponse struct {
 			Results []struct {
-				Content string `json:"content"`
+				ID          int    `json:"id"`
+				Title       string `json:"title"`
+				ReleaseDate string `json:"release_date"`
 			} `json:"results"`
 		}
 
-		err = json.Unmarshal(bodyRatingsTMDB, &reviewsResponse)
-		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "Erro ao processar avaliações do TMDb"})
+		if err := json.Unmarshal(body, &tmdbResponse); err != nil {
+			errChan <- err
 			return
 		}
 
-		// Limitar a quantidade de comentários para 3
-		var comments []string
-		for i := 0; i < 3 && i < len(reviewsResponse.Results); i++ {
-			comments = append(comments, reviewsResponse.Results[i].Content)
+		var movieID int
+		for _, movieResult := range tmdbResponse.Results {
+			if strings.HasPrefix(movieResult.ReleaseDate, "1996") {
+				movieID = movieResult.ID
+				break
+			}
 		}
 
-		// Atualiza a lista de comentários
-		movie.Comments = comments
-	} else {
-		movie.Comments = []string{"Nenhuma avaliação encontrada"}
+		// Se não encontrou filme de 1996, pega o primeiro disponível
+		if movieID == 0 && len(tmdbResponse.Results) > 0 {
+			movieID = tmdbResponse.Results[0].ID
+		}
+
+		if movieID != 0 {
+			// Buscamos as avaliações do filme
+			apiURLRatings := fmt.Sprintf("https://api.themoviedb.org/3/movie/%d/reviews?api_key=%s", movieID, apiKeyTMDB)
+			respRatings, err := http.Get(apiURLRatings)
+			if err != nil {
+				errChan <- err
+				return
+			}
+			defer respRatings.Body.Close()
+
+			bodyRatings, err := ioutil.ReadAll(respRatings.Body)
+			if err != nil {
+				errChan <- err
+				return
+			}
+
+			var reviewsResponse struct {
+				Results []struct {
+					Content string `json:"content"`
+				} `json:"results"`
+			}
+
+			if err := json.Unmarshal(bodyRatings, &reviewsResponse); err != nil {
+				errChan <- err
+				return
+			}
+
+			// Coletamos até 3 comentários
+			var comments []string
+			for i := 0; i < 3 && i < len(reviewsResponse.Results); i++ {
+				comments = append(comments, reviewsResponse.Results[i].Content)
+			}
+
+			// Protegemos a escrita concorrente com Mutex
+			mu.Lock()
+			movie.Comments = comments
+			mu.Unlock()
+		} else {
+			mu.Lock()
+			movie.Comments = []string{"Nenhuma avaliação encontrada"}
+			mu.Unlock()
+		}
+	}()
+
+	// Esperamos as goroutines terminarem
+	wg.Wait()
+	close(errChan) // Fechamos o canal de erros
+
+	// Verificamos se houve erro
+	for err := range errChan {
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
 	}
 
-	// Retornamos os dados do filme com as avaliações
 	c.JSON(http.StatusOK, movie)
 }
 
 func main() {
 	r := gin.Default()
 
-	// Habilita CORS para permitir requisições do front-end
+	// Habilita CORS
 	r.Use(cors.New(cors.Config{
-		AllowOrigins:     []string{"*"}, // Permite qualquer origem (ajuste conforme necessário)
+		AllowOrigins:     []string{"*"},
 		AllowMethods:     []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
 		AllowHeaders:     []string{"Origin", "Content-Type", "Authorization"},
 		ExposeHeaders:    []string{"Content-Length"},
 		AllowCredentials: true,
 	}))
-	// Endpoint para buscar filmes pelo título
+
+	// Endpoint para buscar filmes
 	r.GET("/movie", getMovie)
 
 	// Iniciamos o servidor na porta 8080
