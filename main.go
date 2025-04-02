@@ -108,7 +108,6 @@ func getMovie(c *gin.Context) {
 			}
 		}
 
-		// Se não encontrou filme de 1996, pega o primeiro disponível
 		if movieID == 0 && len(tmdbResponse.Results) > 0 {
 			movieID = tmdbResponse.Results[0].ID
 		}
